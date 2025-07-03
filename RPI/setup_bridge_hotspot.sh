@@ -85,11 +85,11 @@ if [ -n "$ETH1" ]; then
 fi
 
 # ASK FOR SSID
-read -rp "Enter desired WiFi SSID: " SSID
+read -rp "Introduce el SSID deseado: " SSID
 while true; do
-  read -rsp "Enter WiFi password (min 8 chars, incl. uppercase, letters and numbers): " pass1
+  read -rsp "Introduce la contraseña WiFi (mínimo 8 caracteres, incl. mayúsculas y números): " pass1
   echo
-  read -rsp "Confirm password: " pass2
+  read -rsp "Confirma la contraseña: " pass2
   echo
 
   if [[ "$pass1" != "$pass2" ]]; then
@@ -114,7 +114,7 @@ done
 # CONFIRM SSID AND PASSWORD
 echo "WiFi SSID: $SSID"
 echo "WiFi password: ***********${pass1: -3}"
-read -rp "Apply these settings? (y/n): " confirm
+read -rp "¿Aplicar estos ajustes? (s/n): " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
   echo "Setup canceled."
   exit 1
@@ -130,7 +130,14 @@ safe_run "disable IP config on $WIFI_INTERFACE" sudo nmcli con modify hotspot ip
 safe_run "disable IPv6 on $WIFI_INTERFACE" sudo nmcli con modify hotspot ipv6.method ignore
 safe_run "set hotspot to autoconnect" sudo nmcli con modify hotspot connection.autoconnect yes
 safe_run "ensure br0 gets IP via DHCP" sudo nmcli con modify br0 ipv4.method auto
+
 safe_run "bring up hotspot" sudo nmcli con up hotspot
+
+# Ensure bridge is up after hotspot
+safe_run "ensure br0 is up" sudo nmcli con up br0 || sudo ip link set br0 up
+
+# Ensure Wi‑Fi interface is active
+safe_run "bring up Wi‑Fi device" sudo nmcli device connect "$WIFI_INTERFACE" || sudo ip link set "$WIFI_INTERFACE" up
 
 # FINAL VERIFICATION
 nmcli con show
