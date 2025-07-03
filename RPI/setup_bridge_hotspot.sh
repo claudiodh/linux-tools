@@ -121,3 +121,12 @@ echo "Adding passwordless sudo permission for nmcli for user: $SUDOUSER"
 echo "$SUDOUSER ALL=(ALL) NOPASSWD: /usr/bin/nmcli" | sudo tee /etc/sudoers.d/nmcli > /dev/null
 
 echo "Setup complete. Raspberry Pi is now broadcasting '$SSID'."
+
+# ASK TO REBOOT
+read -rp "Do you want to reboot now? (y/n): " reboot_confirm
+if [[ "$reboot_confirm" == "y" || "$reboot_confirm" == "Y" ]]; then
+  echo "Rebooting..."
+  sudo reboot
+else
+  echo "Reboot skipped. You may need to reboot manually later."
+fi
