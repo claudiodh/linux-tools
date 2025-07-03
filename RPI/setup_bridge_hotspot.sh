@@ -20,17 +20,22 @@ safe_run() {
   return 0
 }
 
-# Detect interfaces dynamically
-ETH_INTERFACES=($(nmcli device | grep ethernet | awk '{print $1}'))
-WIFI_INTERFACE=$(nmcli device | grep wifi | awk 'NR==1{print $1}')
+# Detect interfaces dynamically with fallback
+ETH_INTERFACES=( $(nmcli device status | awk '$2=="ethernet" {print $1}') )
+WIFI_INTERFACE=$(nmcli device status | awk '$2=="wifi" {print $1; exit}')
 
-if [ ${#ETH_INTERFACES[@]} -lt 2 ]; then
-  echo "[ERROR] Less than two ethernet interfaces found. Cannot proceed."
+if [ ${#ETH_INTERFACES[@]} -lt 1 ]; then
+  echo "[ERROR] No ethernet interface found. Cannot proceed."
   exit 1
 fi
 
-ETH0="${ETH_INTERFACES[0]}"
-ETH1="${ETH_INTERFACES[1]}"
+ETH0=${ETH_INTERFACES[0]}
+if [ ${#ETH_INTERFACES[@]} -ge 2 ]; then
+  ETH1=${ETH_INTERFACES[1]}
+else
+  ETH1=""
+  echo "[WARN] Only one ethernet detected ($ETH0). Skipping secondary slave."
+fi
 
 # ASK FOR USERNAME TO SET SUDOERS RULE
 read -rp "Enter the username you want to allow nmcli without password: " SUDOUSER
@@ -68,12 +73,16 @@ safe_run "start NetworkManager" sudo systemctl start NetworkManager
 safe_run "add bridge interface br0" sudo nmcli con add type bridge ifname br0 con-name br0 autoconnect yes
 safe_run "add $ETH0 to bridge" sudo nmcli con add type ethernet ifname "$ETH0" con-name br0-eth0 master br0
 safe_run "enable autoconnect for br0-eth0" sudo nmcli con modify br0-eth0 connection.autoconnect yes
-safe_run "add $ETH1 to bridge" sudo nmcli con add type ethernet ifname "$ETH1" con-name br0-eth1 master br0
-safe_run "enable autoconnect for br0-eth1" sudo nmcli con modify br0-eth1 connection.autoconnect yes
+if [ -n "$ETH1" ]; then
+  safe_run "add $ETH1 to bridge" sudo nmcli con add type ethernet ifname "$ETH1" con-name br0-eth1 master br0
+  safe_run "enable autoconnect for br0-eth1" sudo nmcli con modify br0-eth1 connection.autoconnect yes
+fi
 safe_run "configure br0 for DHCP" sudo nmcli con modify br0 ipv4.method auto ipv6.method ignore
 safe_run "bring up br0" sudo nmcli con up br0
 safe_run "bring up br0-eth0" sudo nmcli con up br0-eth0
-safe_run "bring up br0-eth1" sudo nmcli con up br0-eth1
+if [ -n "$ETH1" ]; then
+  safe_run "bring up br0-eth1" sudo nmcli con up br0-eth1
+fi
 
 # ASK FOR SSID
 read -rp "Enter desired WiFi SSID: " SSID
