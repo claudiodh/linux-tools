@@ -24,8 +24,8 @@ done
 ##########################################################
 
 echo "Enabling NetworkManager and disabling dhcpcd..."
-sudo systemctl stop dhcpcd
-sudo systemctl disable dhcpcd
+#sudo systemctl stop dhcpcd
+#sudo systemctl disable dhcpcd
 sudo systemctl enable NetworkManager
 sudo systemctl start NetworkManager
 
