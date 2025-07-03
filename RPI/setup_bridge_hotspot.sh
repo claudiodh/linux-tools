@@ -32,6 +32,18 @@ safe_run() {
   return 0
 }
 
+# Detect interfaces dynamically
+ETH_INTERFACES=($(nmcli device | grep ethernet | awk '{print $1}'))
+WIFI_INTERFACE=$(nmcli device | grep wifi | awk 'NR==1{print $1}')
+
+if [ ${#ETH_INTERFACES[@]} -lt 2 ]; then
+  echo "[ERROR] Less than two ethernet interfaces found. Cannot proceed."
+  exit 1
+fi
+
+ETH0="${ETH_INTERFACES[0]}"
+ETH1="${ETH_INTERFACES[1]}"
+
 # ASK FOR USERNAME TO SET SUDOERS RULE
 read -rp "Enter the username you want to allow nmcli without password: " SUDOUSER
 
@@ -57,8 +69,8 @@ safe_run "start NetworkManager" sudo systemctl start NetworkManager
 
 # CREATE BRIDGE AND ATTACH ETH INTERFACES
 safe_run "add bridge interface br0" sudo nmcli con add type bridge ifname br0 con-name br0 autoconnect yes
-safe_run "add eth0 to bridge" sudo nmcli con add type ethernet ifname eth0 con-name br0-eth0 master br0
-safe_run "add eth1 to bridge" sudo nmcli con add type ethernet ifname eth1 con-name br0-eth1 master br0
+safe_run "add $ETH0 to bridge" sudo nmcli con add type ethernet ifname "$ETH0" con-name br0-eth0 master br0
+safe_run "add $ETH1 to bridge" sudo nmcli con add type ethernet ifname "$ETH1" con-name br0-eth1 master br0
 safe_run "configure br0 for DHCP" sudo nmcli con modify br0 ipv4.method auto ipv6.method ignore
 safe_run "bring up br0" sudo nmcli con up br0
 
@@ -99,13 +111,13 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
 fi
 
 # CONFIGURE HOTSPOT
-safe_run "create hotspot connection" sudo nmcli con add type wifi ifname wlan0 con-name hotspot ssid "$SSID" mode ap
+safe_run "create hotspot connection" sudo nmcli con add type wifi ifname "$WIFI_INTERFACE" con-name hotspot ssid "$SSID" mode ap
 safe_run "confirm AP mode" sudo nmcli con modify hotspot 802-11-wireless.mode ap
 safe_run "set WPA2 key mgmt" sudo nmcli con modify hotspot wifi-sec.key-mgmt wpa-psk
 safe_run "set WPA2 password" sudo nmcli con modify hotspot wifi-sec.psk "$pass1"
-safe_run "bridge wlan0 to br0" sudo nmcli con modify hotspot connection.master br0 connection.slave-type bridge
-safe_run "disable IP config on wlan0" sudo nmcli con modify hotspot ipv4.method disabled
-safe_run "disable IPv6 on wlan0" sudo nmcli con modify hotspot ipv6.method ignore
+safe_run "bridge $WIFI_INTERFACE to br0" sudo nmcli con modify hotspot connection.master br0 connection.slave-type bridge
+safe_run "disable IP config on $WIFI_INTERFACE" sudo nmcli con modify hotspot ipv4.method disabled
+safe_run "disable IPv6 on $WIFI_INTERFACE" sudo nmcli con modify hotspot ipv6.method ignore
 safe_run "set hotspot to autoconnect" sudo nmcli con modify hotspot connection.autoconnect yes
 safe_run "ensure br0 gets IP via DHCP" sudo nmcli con modify br0 ipv4.method auto
 safe_run "bring up hotspot" sudo nmcli con up hotspot
@@ -120,9 +132,8 @@ bridge link
 echo "Adding passwordless sudo permission for nmcli for user: $SUDOUSER"
 echo "$SUDOUSER ALL=(ALL) NOPASSWD: /usr/bin/nmcli" | sudo tee /etc/sudoers.d/nmcli > /dev/null
 
+# REBOOT PROMPT
 echo "Setup complete. Raspberry Pi is now broadcasting '$SSID'."
-
-# ASK TO REBOOT
 read -rp "Do you want to reboot now? (y/n): " reboot_confirm
 if [[ "$reboot_confirm" == "y" || "$reboot_confirm" == "Y" ]]; then
   echo "Rebooting..."
