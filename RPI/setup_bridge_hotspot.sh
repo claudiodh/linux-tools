@@ -32,6 +32,9 @@ safe_run() {
   return 0
 }
 
+# ASK FOR USERNAME TO SET SUDOERS RULE
+read -rp "Enter the username you want to allow nmcli without password: " SUDOUSER
+
 # SYSTEM UPDATE
 safe_run "update and upgrade system packages" sudo apt update && sudo apt full-upgrade -y
 
@@ -114,7 +117,7 @@ ip a show br0
 bridge link
 
 # ADD SUDOERS RULE FOR NMCLI
-echo "Adding passwordless sudo permission for nmcli..."
-echo "online ALL=(ALL) NOPASSWD: /usr/bin/nmcli" | sudo tee /etc/sudoers.d/nmcli > /dev/null
+echo "Adding passwordless sudo permission for nmcli for user: $SUDOUSER"
+echo "$SUDOUSER ALL=(ALL) NOPASSWD: /usr/bin/nmcli" | sudo tee /etc/sudoers.d/nmcli > /dev/null
 
 echo "Setup complete. Raspberry Pi is now broadcasting '$SSID'."
