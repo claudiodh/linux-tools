@@ -84,12 +84,14 @@ if [ -n "$ETH1" ]; then
   safe_run "bring up br0-eth1" sudo nmcli con up br0-eth1
 fi
 
-# ASK FOR SSID
-read -rp "Introduce el SSID deseado: " SSID
+# ASK FOR SSID AND PASSWORD
+echo "Wi-Fi Access Point Configuration"
+read -rp "Enter desired WiFi SSID: " SSID
+
 while true; do
-  read -rsp "Introduce la contraseña WiFi (mínimo 8 caracteres, incl. mayúsculas y números): " pass1
+  read -rsp "Enter WiFi password (min 8 chars, incl. uppercase and numbers): " pass1
   echo
-  read -rsp "Confirma la contraseña: " pass2
+  read -rsp "Confirm password: " pass2
   echo
 
   if [[ "$pass1" != "$pass2" ]]; then
@@ -104,21 +106,19 @@ while true; do
     echo "Password must include at least one uppercase letter."
     continue
   fi
-  if ! [[ "$pass1" =~ [a-zA-Z] && "$pass1" =~ [0-9] ]]; then
-    echo "Password must include both letters and numbers."
+  if ! [[ "$pass1" =~ [0-9] ]]; then
+    echo "Password must include at least one number."
     continue
   fi
   break
 done
 
+echo "SSID configured: $SSID"
+
 # CONFIRM SSID AND PASSWORD
 echo "WiFi SSID: $SSID"
 echo "WiFi password: ***********${pass1: -3}"
-read -rp "¿Aplicar estos ajustes? (s/n): " confirm
-if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-  echo "Setup canceled."
-  exit 1
-fi
+read -rp "Apply these settings? (y/n): " confirm
 
 # CONFIGURE HOTSPOT
 safe_run "create hotspot connection" sudo nmcli con add type wifi ifname "$WIFI_INTERFACE" con-name hotspot ssid "$SSID" mode ap
