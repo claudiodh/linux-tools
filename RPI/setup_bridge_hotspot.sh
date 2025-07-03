@@ -41,13 +41,10 @@ safe_run "update and upgrade system packages" sudo apt update && sudo apt full-u
 # INSTALL REQUIRED PACKAGES
 safe_run "install required packages" sudo apt install -y network-manager bridge-utils dnsmasq hostapd iproute2 apache2 libapache2-mod-php
 
-# REMOVE EXISTING CONNECTIONS
-echo "Cleaning up existing NetworkManager connections..."
-nmcli -t -f NAME,TYPE con show | grep -v ':loopback' | cut -d: -f1 | while read -r name; do
-  echo "Deleting: $name"
-  sudo nmcli con delete "$name" 2>/dev/null
-  sleep 0.2
-done
+# REMOVE EXISTING BRIDGE & HOTSPOT CONNECTIONS ONLY
+echo "Cleaning up existing br0 and hotspot connections..."
+sudo nmcli con delete br0 2>/dev/null || true
+sudo nmcli con delete hotspot 2>/dev/null || true
 
 # ENABLE NETWORKMANAGER, DISABLE DHCPCD
 safe_run "stop dhcpcd" sudo systemctl stop dhcpcd
