@@ -1,99 +1,120 @@
 #!/bin/bash
-set -e
 
-echo "Setting up Raspberry Pi as a transparent bridge + WiFi hotspot..."
+set +e  # Allow script to continue even if a command fails
 
-##########################################################
-# STEP 0: CLEAN EXISTING CONNECTIONS (except loopback)
-# --------------------------------------------
-# This ensures no old or conflicting connections break
-# our new bridge. We skip loopback to avoid system issues.
-##########################################################
+# Function to run a command safely and parse known errors
+safe_run() {
+  local description="$1"
+  shift
+  local output
 
-echo "Cleaning old NetworkManager connections..."
+  echo "Running: $description..."
+  output=$("$@" 2>&1)
+  local code=$?
+
+  if [ $code -ne 0 ]; then
+    echo "[ERROR] Failed to: $description"
+    echo "$output"
+
+    if echo "$output" | grep -qi "not found"; then
+      echo "→ Resource not found. Did you update your package lists?"
+    elif echo "$output" | grep -qi "permission denied"; then
+      echo "→ Permission denied. Try running the script with sudo."
+    elif echo "$output" | grep -qi "no such file or directory"; then
+      echo "→ File or directory missing. Double-check paths."
+    elif echo "$output" | grep -qi "connection.*exists"; then
+      echo "→ The connection already exists. Skipping."
+    else
+      echo "→ Unrecognized error. Please investigate manually."
+    fi
+    return $code
+  fi
+  return 0
+}
+
+# SYSTEM UPDATE
+safe_run "update and upgrade system packages" sudo apt update && sudo apt full-upgrade -y
+
+# INSTALL REQUIRED PACKAGES
+safe_run "install required packages" sudo apt install -y network-manager bridge-utils dnsmasq hostapd iproute2 apache2 libapache2-mod-php
+
+# REMOVE EXISTING CONNECTIONS
+echo "Cleaning up existing NetworkManager connections..."
 nmcli -t -f NAME,TYPE con show | grep -v ':loopback' | cut -d: -f1 | while read -r name; do
-  echo "Deleting connection: $name"
-  sudo nmcli con delete "$name"
+  echo "Deleting: $name"
+  sudo nmcli con delete "$name" 2>/dev/null
+  sleep 0.2
 done
 
-##########################################################
-# STEP 1: ENSURE NETWORKMANAGER IS ENABLED
-# --------------------------------------------
-# We disable dhcpcd because it conflicts with NetworkManager
-# and can interfere with bridge/AP configurations.
-##########################################################
+# ENABLE NETWORKMANAGER, DISABLE DHCPCD
+safe_run "stop dhcpcd" sudo systemctl stop dhcpcd
+safe_run "disable dhcpcd" sudo systemctl disable dhcpcd
+safe_run "enable NetworkManager" sudo systemctl enable NetworkManager
+safe_run "start NetworkManager" sudo systemctl start NetworkManager
 
-echo "Enabling NetworkManager and disabling dhcpcd..."
-#sudo systemctl stop dhcpcd
-#sudo systemctl disable dhcpcd
-sudo systemctl enable NetworkManager
-sudo systemctl start NetworkManager
+# CREATE BRIDGE AND ATTACH ETH INTERFACES
+safe_run "add bridge interface br0" sudo nmcli con add type bridge ifname br0 con-name br0 autoconnect yes
+safe_run "add eth0 to bridge" sudo nmcli con add type ethernet ifname eth0 con-name br0-eth0 master br0
+safe_run "add eth1 to bridge" sudo nmcli con add type ethernet ifname eth1 con-name br0-eth1 master br0
+safe_run "configure br0 for DHCP" sudo nmcli con modify br0 ipv4.method auto ipv6.method ignore
+safe_run "bring up br0" sudo nmcli con up br0
 
-##########################################################
-# STEP 2: INSTALL REQUIRED PACKAGES
-# --------------------------------------------
-# These tools are required to manage networks and enable AP mode.
-# - bridge-utils: for bridging interfaces
-# - hostapd: required for Wi-Fi AP functionality
-# - dnsmasq: (optional, not used here, but common in AP setups)
-# - iproute2: for ip/bridge commands
-##########################################################
+# ASK FOR SSID
+read -rp "Enter desired WiFi SSID: " SSID
+while true; do
+  read -rsp "Enter WiFi password (min 8 chars, incl. uppercase, letters and numbers): " pass1
+  echo
+  read -rsp "Confirm password: " pass2
+  echo
 
-echo "Installing required network packages.../"
-sudo apt update
-sudo apt install -y network-manager bridge-utils dnsmasq hostapd iproute2
+  if [[ "$pass1" != "$pass2" ]]; then
+    echo "Passwords do not match. Try again."
+    continue
+  fi
+  if [[ ${#pass1} -lt 8 ]]; then
+    echo "Password must be at least 8 characters."
+    continue
+  fi
+  if ! [[ "$pass1" =~ [A-Z] ]]; then
+    echo "Password must include at least one uppercase letter."
+    continue
+  fi
+  if ! [[ "$pass1" =~ [a-zA-Z] && "$pass1" =~ [0-9] ]]; then
+    echo "Password must include both letters and numbers."
+    continue
+  fi
+  break
+done
 
-##########################################################
-# STEP 3: CREATE A BRIDGE AND ATTACH ETHERNET INTERFACES
-# --------------------------------------------
-# - br0 acts as a virtual switch between eth0 (WAN input)
-#   and eth1 (LAN output).
-# - Devices connected to eth1 will get IPs from the same
-#   router that eth0 is connected to.
-##########################################################
+# CONFIRM SSID AND PASSWORD
+echo "WiFi SSID: $SSID"
+echo "WiFi password: ***********${pass1: -3}"
+read -rp "Apply these settings? (y/n): " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+  echo "Setup canceled."
+  exit 1
+fi
 
-echo "Creating bridge 'br0' and adding eth0 + eth1 to it..."
-sudo nmcli con add type bridge ifname br0 con-name br0 autoconnect yes
-sudo nmcli con add type ethernet ifname eth0 master br0 con-name br0-eth0 autoconnect yes
-sudo nmcli con add type ethernet ifname eth1 master br0 con-name br0-eth1 autoconnect yes
-sudo nmcli con modify br0 ipv4.method auto ipv6.method ignore
-sudo nmcli con up br0
+# CONFIGURE HOTSPOT
+safe_run "create hotspot connection" sudo nmcli con add type wifi ifname wlan0 con-name hotspot ssid "$SSID" mode ap
+safe_run "confirm AP mode" sudo nmcli con modify hotspot 802-11-wireless.mode ap
+safe_run "set WPA2 key mgmt" sudo nmcli con modify hotspot wifi-sec.key-mgmt wpa-psk
+safe_run "set WPA2 password" sudo nmcli con modify hotspot wifi-sec.psk "$pass1"
+safe_run "bridge wlan0 to br0" sudo nmcli con modify hotspot connection.master br0 connection.slave-type bridge
+safe_run "disable IP config on wlan0" sudo nmcli con modify hotspot ipv4.method disabled
+safe_run "disable IPv6 on wlan0" sudo nmcli con modify hotspot ipv6.method ignore
+safe_run "set hotspot to autoconnect" sudo nmcli con modify hotspot connection.autoconnect yes
+safe_run "ensure br0 gets IP via DHCP" sudo nmcli con modify br0 ipv4.method auto
+safe_run "bring up hotspot" sudo nmcli con up hotspot
 
-##########################################################
-# STEP 4: CONFIGURE WIFI ACCESS POINT BRIDGED TO br0
-# --------------------------------------------
-# - wlan0 is configured in AP (Access Point) mode.
-# - It is bridged to br0 so clients receive IPs from the same router.
-# - No NAT or local DHCP is configured; the router handles everything.
-# - WPA2 with a pre-shared key is used for security.
-##########################################################
-
-echo "Creating WiFi Access Point (SSID: RPI-WIFI)..."
-sudo nmcli con add type wifi ifname wlan0 con-name hotspot ssid RPI-WIFI mode ap
-sudo nmcli con modify hotspot 802-11-wireless.mode ap
-sudo nmcli con modify hotspot wifi-sec.key-mgmt wpa-psk
-sudo nmcli con modify hotspot wifi-sec.psk "Online123"
-sudo nmcli con modify hotspot connection.master br0 connection.slave-type bridge
-
-# IP method disabled since IP handling is managed by the bridge
-# and upstream router (through eth0)
-echo "Disabling IP configuration for wlan0..."
-sudo nmcli con modify hotspot ipv4.method disabled
-sudo nmcli con modify hotspot ipv6.method ignore
-
-# Activate connections
-echo "Bringing up bridge and hotspot..."
-sudo nmcli con up br0
-sudo nmcli con up hotspot
-
-##########################################################
-# STEP 5: VERIFICATION AND FINAL STATUS
-##########################################################
-
-echo "Final status:"
+# FINAL VERIFICATION
 nmcli con show
 nmcli device status
 ip a show br0
 bridge link
 
-echo "🎉 Raspberry Pi is now broadcasting 'RPI-WIFI' as a bridged hotspot!"
+# ADD SUDOERS RULE FOR NMCLI
+echo "Adding passwordless sudo permission for nmcli..."
+echo "online ALL=(ALL) NOPASSWD: /usr/bin/nmcli" | sudo tee /etc/sudoers.d/nmcli > /dev/null
+
+echo "Setup complete. Raspberry Pi is now broadcasting '$SSID'."
