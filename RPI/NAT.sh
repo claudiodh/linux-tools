@@ -1,63 +1,68 @@
 #!/usr/bin/env bash
 
-# Raspberry Pi 3 (Bookworm) NAT router and Wi-Fi AP setup using nmcli
-# WAN: eth0 (DHCP), LAN: eth1 (NAT), Wi-Fi AP: SSID RPI-WIFI, password online123
+# Script to set up Raspberry Pi as a router & Wi-Fi AP (Bookworm on Pi3)
+# WAN: eth0 (DHCP), LAN: eth1 (shared NAT), AP: SSID RPI-WIFI, WPA2-PSK online123
+# Includes system upgrade, package install, regulatory domain, persistent settings, and boot-proof NM connections
 
 set -euo pipefail
 
-# System update and upgrade
-echo "Updating package lists..."
+# 1) Update, upgrade system and install dependencies
+echo "Updating and upgrading system; installing dependencies..."
 sudo apt update -y
-
-echo "Upgrading installed packages..."
 sudo apt full-upgrade -y
+sudo apt install -y apache2 php libapache2-mod-php tcpdump bridge-utils wireless-tools
 
-echo
-# Configure WAN (eth0) with DHCP
-echo "Setting up WAN on eth0 (DHCP)..."
-sudo nmcli connection add \
-  type ethernet ifname eth0 con-name WAN-eth0 ipv4.method auto autoconnect yes
-sudo nmcli connection up WAN-eth0
+# 2) Set Wi-Fi regulatory domain to Canada
+echo "Setting regulatory domain to CA..."
+sudo iw reg set CA
 
-echo
-# Configure LAN (eth1) with IPv4 sharing (NAT)
-echo "Setting up LAN on eth1 (IPv4 shared)..."
-sudo nmcli connection add \
-  type ethernet ifname eth1 con-name LAN-eth1 ipv4.method shared autoconnect yes
-sudo nmcli connection up LAN-eth1
+# 3) Persist IPv4 forwarding across reboots
+echo "Persisting IPv4 forwarding in /etc/sysctl.conf..."
+sudo sed -i 's/^#\(net\.ipv4\.ip_forward=1\)/\1/' /etc/sysctl.conf
+sudo bash -c "sudo sysctl -p"
 
-echo
-# Configure Wi-Fi Access Point
-SSID="RPI-WIFI"
-PASSWORD="online123"
-echo "Setting up Wi-Fi AP ($SSID)..."
-sudo nmcli connection add \
-  type wifi ifname wlan0 con-name AP-$SSID ssid $SSID autoconnect yes
-sudo nmcli connection modify AP-$SSID \
+# 4) Configure WAN on eth0 (DHCP)
+echo "Removing old WAN-eth0 profile (if exists)..."
+sudo nmcli connection delete WAN-eth0 2>/dev/null || echo "No WAN-eth0 profile found; skipping"
+
+echo "Configuring WAN on eth0..."
+sudo nmcli connection add type ethernet ifname eth0 con-name WAN-eth0 ipv4.method auto autoconnect yes
+sudo nmcli connection up WAN-eth0 || true
+
+# 5) Configure LAN on eth1 (NAT shared)
+echo "Removing old LAN-eth1 profile (if exists)..."
+sudo nmcli connection delete LAN-eth1 2>/dev/null || echo "No LAN-eth1 profile found; skipping"
+
+echo "Configuring LAN on eth1..."
+sudo nmcli connection add type ethernet ifname eth1 con-name LAN-eth1 ipv4.method shared autoconnect yes
+sudo nmcli connection up LAN-eth1 || true
+
+# 6) Remove any old Wi-Fi profile named RPI-WIFI
+echo "Removing existing RPI-WIFI profile (if exists)..."
+sudo nmcli connection delete RPI-WIFI 2>/dev/null || echo "No RPI-WIFI profile found; skipping"
+
+# 7) Create hotspot profile
+echo "Creating hotspot RPI-WIFI..."
+sudo nmcli connection add type wifi ifname wlan0 con-name RPI-WIFI ssid "RPI-WIFI" autoconnect yes
+
+# 8) Configure AP mode, band, NAT sharing, and WPA2 security
+echo "Configuring AP mode, band, NAT and security..."
+sudo nmcli connection modify RPI-WIFI \
   802-11-wireless.mode ap \
   802-11-wireless.band bg \
   ipv4.method shared \
   wifi-sec.key-mgmt wpa-psk \
-  wifi-sec.psk "$PASSWORD"
-sudo nmcli connection up AP-$SSID
+  wifi-sec.psk "online123"
 
-echo
-# Ensure all connections are active
-echo "Ensuring all connections are up..."
-sudo nmcli connection up WAN-eth0 || true
-sudo nmcli connection up LAN-eth1 || true
-sudo nmcli connection up AP-$SSID || true
+# 9) Activate the hotspot
+echo "Activating hotspot..."
+sudo nmcli connection up RPI-WIFI
 
-echo
-# Display active connections and IP addresses
-echo "Active connections:"
-sudo nmcli connection show --active
+# 10) Status check
+echo -e "\nFinal status:"
+nmcli connection show WAN-eth0 LAN-eth1 RPI-WIFI | grep -E 'NAME|ipv4.method|802-11-wireless.mode'
+iw dev wlan0 info | grep type
+ip addr show eth0 | grep inet
+ip addr show eth1 | grep inet
 
-echo
-# Display devices and IPv4 addresses
-echo "Device IPs:"
-sudo nmcli device show | grep -E 'GENERAL.DEVICE|IP4.ADDRESS' | sed 'N;s/\n/ -> /'
-
-echo
-# Done
-echo "Setup complete: NAT router and AP are running."
+echo -e "\nSetup complete and boot-proof: all connections will auto-connect on reboot."
