@@ -1,54 +1,63 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Raspberry Pi Router Script (Bookworm compatible)
-# WAN: eth0 | LAN: eth1 | Wi-Fi AP: RPI-WIFI
+# Raspberry Pi 3 (Bookworm) NAT router and Wi-Fi AP setup using nmcli
+# WAN: eth0 (DHCP), LAN: eth1 (NAT), Wi-Fi AP: SSID RPI-WIFI, password online123
 
-set -e
+set -euo pipefail
 
-echo "🔄 Updating system..."
-sudo apt update
+# System update and upgrade
+echo "Updating package lists..."
+sudo apt update -y
+
+echo "Upgrading installed packages..."
 sudo apt full-upgrade -y
 
-echo "📦 Installing required packages..."
-sudo apt install -y network-manager iptables-persistent
+echo
+# Configure WAN (eth0) with DHCP
+echo "Setting up WAN on eth0 (DHCP)..."
+sudo nmcli connection add \
+  type ethernet ifname eth0 con-name WAN-eth0 ipv4.method auto autoconnect yes
+sudo nmcli connection up WAN-eth0
 
-echo "🚀 Enabling NetworkManager..."
-sudo systemctl enable NetworkManager
-sudo systemctl start NetworkManager
+echo
+# Configure LAN (eth1) with IPv4 sharing (NAT)
+echo "Setting up LAN on eth1 (IPv4 shared)..."
+sudo nmcli connection add \
+  type ethernet ifname eth1 con-name LAN-eth1 ipv4.method shared autoconnect yes
+sudo nmcli connection up LAN-eth1
 
-# =============== Configure WAN (eth0) ===============
-echo "🌐 Configuring eth0 as WAN (DHCP)"
-nmcli con delete eth0-wan 2>/dev/null || true
-nmcli con add type ethernet ifname eth0 con-name eth0-wan
-nmcli con modify eth0-wan ipv4.method auto
-nmcli con up eth0-wan
+echo
+# Configure Wi-Fi Access Point
+SSID="RPI-WIFI"
+PASSWORD="online123"
+echo "Setting up Wi-Fi AP ($SSID)..."
+sudo nmcli connection add \
+  type wifi ifname wlan0 con-name AP-$SSID ssid $SSID autoconnect yes
+sudo nmcli connection modify AP-$SSID \
+  802-11-wireless.mode ap \
+  802-11-wireless.band bg \
+  ipv4.method shared \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "$PASSWORD"
+sudo nmcli connection up AP-$SSID
 
-# =============== Configure LAN (eth1) ===============
-echo "📡 Configuring eth1 as LAN (static + DHCP)"
-nmcli con delete eth1-lan 2>/dev/null || true
-nmcli con add type ethernet ifname eth1 con-name eth1-lan
-nmcli con modify eth1-lan ipv4.addresses 192.168.50.1/24
-nmcli con modify eth1-lan ipv4.method manual
-nmcli con modify eth1-lan ipv4.never-default yes
-nmcli con modify eth1-lan ipv4.dhcp-server yes
-nmcli con modify eth1-lan ipv4.dhcp-ranges "192.168.50.10 192.168.50.100"
-nmcli con up eth1-lan
+echo
+# Ensure all connections are active
+echo "Ensuring all connections are up..."
+sudo nmcli connection up WAN-eth0 || true
+sudo nmcli connection up LAN-eth1 || true
+sudo nmcli connection up AP-$SSID || true
 
-# =============== Configure Wi-Fi Hotspot ===============
-echo "📶 Setting up Wi-Fi Access Point"
-nmcli radio wifi on
-nmcli con delete rpi-hotspot 2>/dev/null || true
-nmcli dev wifi hotspot ifname wlan0 ssid RPI-WIFI password online123
-nmcli con modify Hotspot connection.autoconnect yes
-nmcli con modify Hotspot ipv4.method shared
-nmcli con up Hotspot
+echo
+# Display active connections and IP addresses
+echo "Active connections:"
+sudo nmcli connection show --active
 
-# =============== Enable IP Forwarding and NAT ===============
-echo "🔁 Enabling NAT and IP forwarding"
-sudo sysctl -w net.ipv4.ip_forward=1
-echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+echo
+# Display devices and IPv4 addresses
+echo "Device IPs:"
+sudo nmcli device show | grep -E 'GENERAL.DEVICE|IP4.ADDRESS' | sed 'N;s/\n/ -> /'
 
-sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-sudo netfilter-persistent save
-
-echo "✅ Setup complete! RPI is now a router with Wi-Fi hotspot."
+echo
+# Done
+echo "Setup complete: NAT router and AP are running."
